@@ -77,27 +77,27 @@ with open("output.txt", "w") as log:
                     pmi = np.log((pwc + smooth) / (pw * pc + smooth))
                     pmi = np.maximum(pmi, 0)
 
-                    U, S, _ = svds(pmi, k=dim)
+                    U, S, Vt = svds(pmi, k=min(dim, min(pmi.shape) - 1))
                     idx = np.argsort(S)[::-1]
-                    embeddings = U[:, idx] * S[idx]
+                    U, S, Vt = U[:, idx], S[idx], Vt[idx, :]
+                    embeddings = U * S
 
                     embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-10
 
-                    sparsity = (1 - np.count_nonzero(cooccurrence_matrix) / cooccurrence_matrix.size) * 100
-
-                    target_sparsity = 98.0
-                    score = abs(sparsity - target_sparsity)
+                    M_reconstructed = (U * S) @ Vt
+                    reconstruction_error = np.linalg.norm(pmi - M_reconstructed, 'fro')
+                    score = reconstruction_error
 
                     if score < best_score:
                         best_score = score
-                        best_config = (min_count, win, dim, smooth, sparsity)
+                        best_config = (min_count, win, dim, smooth, reconstruction_error)
                         best_model = {
                             'embeddings': torch.FloatTensor(embeddings.copy()),
                             'word2idx': word_to_index.copy(),
                             'idx2word': index_to_word.copy()
                         }
                     
-                    log.write(f"min={min_count}, win={win}, dim={dim}, smooth={smooth}, sparsity={sparsity:.2f}\n")
+                    log.write(f"min={min_count}, win={win}, dim={dim}, smooth={smooth}, recon_error={reconstruction_error:.4f}\n")
 
 print("Best configuration selected:")
 print(best_config)

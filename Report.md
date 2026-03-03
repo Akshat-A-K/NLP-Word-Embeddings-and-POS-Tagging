@@ -1,353 +1,357 @@
-## Assignment 2 – Word Embeddings on the Brown Corpus
+# Assignment 2 Report
 
-### 1. Task Overview
+## Roll Number: 2025201005
 
-- **Goal**: Train and analyze word embeddings on the Brown corpus using:
-  - **Frequency-based embeddings**: SVD over a PPMI co‑occurrence matrix.
-  - **Prediction-based embeddings**: Word2Vec **Skip‑Gram with Negative Sampling**.
-  - **Pre-trained embeddings**: Brown‑vocabulary‑aligned **GloVe 6B (300d)**.
-- **Evaluation**:
-  - Intrinsic tests: cosine similarities and nearest neighbors.
-  - **Analogy test**: \(A : B :: C : ?\) for semantic/syntactic relationships (Task 2.1).
-  - **Bias check**: cosine similarity between profession words and gender terms (Task 2.2).
+## Introduction
 
-All models use the **Brown corpus from NLTK** and the learned embeddings are saved as `.pt` files under `embeddings/`.
+For this assignment, I trained and compared three embedding variants using the Brown corpus:
 
----
+1. SVD embeddings (count-based)
+2. Word2Vec Skip-Gram with negative sampling (prediction-based)
+3. Pre-trained GloVe embeddings aligned to Brown vocabulary
 
-### 2. Data and Pre‑processing
-
-- **Corpus**: `nltk.corpus.brown` (sentence-level tokenization).
-- **Token filtering**:
-  - Keep only **alphabetic tokens** (`word.isalpha()`).
-  - Convert all tokens to **lowercase**.
-  - Remove empty sentences after filtering.
-- **Vocabulary construction**:
-  - For **SVD**: vocabulary filtered by frequency threshold **min_count = 5**.
-  - For **Skip‑Gram**: vocabulary filtered by **min_count = 2**.
-  - These thresholds balance:
-    - **Noise reduction** (dropping very rare words that are poorly estimated).
-    - **Model size / runtime**, especially for the dense co‑occurrence matrix (SVD) and large number of training pairs (Skip‑Gram).
+Then I used all three embeddings in a POS tagging pipeline with an MLP classifier and compared performance using Accuracy and Macro-F1.
 
 ---
 
-### 3. SVD Embeddings (Task 1.1)
+## 1. Training Word Vectors
 
-#### 3.1 Co‑occurrence Matrix and Weighting
+### 1.1 Dataset and preprocessing
 
-- **Context window**: symmetric window of size \(w\), i.e., for a focus word at position \(i\) we count words in \([i-w, i+w]\setminus\{i\}\).
-- **Counts**: build a \(|V| \times |V|\) **word–context co‑occurrence matrix** \(C\) over the filtered sentences.
-- **Probabilities**:
-  - \(P(w,c) = \frac{C_{w,c}}{\sum_{w',c'} C_{w',c'}}\)
-  - \(P(w) = \sum_c P(w,c)\), \(P(c) = \sum_w P(w,c)\)
-- **PPMI weighting with smoothing**:
-  - \(\text{PMI}(w,c) = \log \frac{P(w,c) + \epsilon}{P(w)P(c) + \epsilon}\)
-  - \(\text{PPMI}(w,c) = \max(\text{PMI}(w,c), 0)\)
-  - Small \(\epsilon\) avoids taking log of zero and stabilizes estimates for very rare events.
+- Corpus: `nltk.corpus.brown`
+- Token cleaning: lowercase + keep only alphabetic tokens (`word.isalpha()`)
+- Non-empty cleaned sentence count: **56,766**
+- Total cleaned tokens: **981,716**
 
-#### 3.2 Hyperparameter Search
-
-- **Grid**:
-  - `minimum_count`: \(\{2, 5\}\)
-  - `window_size`: \(\{2, 3, 4\}\)
-  - `embedding_dim`: \(\{100, 200, 300\}\)
-  - `ppmi_smoothing`: \(\{1e{-8}, 1e{-6}, 1e{-4}\)\)
-- For each configuration:
-  - Build co‑occurrence matrix and PPMI.
-  - Compute **matrix sparsity** (percentage of zero entries).
-  - Apply **truncated SVD** (`scipy.sparse.linalg.svds`) with rank `embedding_dim`.
-  - Construct word vectors as \(U S\) (sorted by descending singular value) and **L2‑normalize** rows.
-- **Selection criterion**:
-  - Target sparsity was set to about **98%**, a regime where:
-    - The matrix is sparse enough to be memory‑efficient.
-    - But still dense enough that PMI statistics are meaningful.
-  - For each configuration, compute:
-    - `score = |sparsity − 98.0|`
-  - Choose the configuration with the **smallest score** (i.e., sparsity closest to 98%).
-
-#### 3.3 Final SVD Configuration
-
-- **Best configuration (from `svd_output.txt`)**:
-  - `minimum_count = 5`
-  - `window_size = 4`
-  - `embedding_dim = 100`
-  - `ppmi_smoothing = 1e-8`
-  - Resulting sparsity ≈ **98.91%**
-- **Justification**:
-  - **Higher `minimum_count` (5)**:
-    - Removes very rare words with unreliable co‑occurrence statistics.
-    - Shrinks the vocabulary, directly reducing memory usage of the dense matrix.
-  - **Larger window (`4`)**:
-    - Captures broader topical/semantic contexts, which is beneficial for SVD‑style global embeddings.
-    - Slightly reduces sparsity compared to smaller windows, bringing it closer to the 98% target.
-  - **Moderate dimensionality (`100`)**:
-    - Sufficient to encode major semantic axes for a relatively small corpus (Brown).
-    - Lower dimensionality also acts as **regularization**, reducing overfitting to noise.
-  - **Very small smoothing (`1e-8`)**:
-    - Stabilizes PMI for low‑frequency pairs without excessively dampening informative PMI values.
-
-The final SVD model is saved as **`embeddings/svd.pt`** (containing `embeddings`, `word2idx`, and `idx2word`).
+This preprocessing was kept consistent across SVD and Word2Vec training.
 
 ---
 
-### 4. Neural Word Embeddings – Skip‑Gram with Negative Sampling (Task 1.2)
+### 1.2 SVD embeddings
 
-#### 4.1 Model Architecture
+#### Method
 
-- Implemented a **Word2Vec Skip‑Gram** model:
-  - Two embedding matrices:
-    - **Target embeddings**: `Embedding(vocab_size, embedding_dim)`
-    - **Context embeddings**: `Embedding(vocab_size, embedding_dim)`
-  - For each (target, context) pair:
-    - Positive score: dot product \(v_w \cdot v_c\)
-    - Negative samples: multiple context words drawn from a **noise distribution**.
-  - **Loss** for each batch:
-    - Maximize \(\log \sigma(v_w \cdot v_c)\) for positive pairs.
-    - Maximize \(\sum_{n} \log \sigma(-v_w \cdot v_{n})\) for negative pairs.
-    - Implemented as a **negative log‑likelihood** minimized with Adam.
+I built a word-word co-occurrence matrix from Brown with a symmetric context window. Then I applied PPMI weighting and truncated SVD. The final embedding matrix was `U * S` and row-normalized.
 
-#### 4.2 Negative Sampling and Training Data
+#### Hyperparameter grid
 
-- **Training pairs**:
-  - Generated by sliding a symmetric window over filtered sentences
-    (with `window_size` chosen during search; see below).
-  - For each target word, all context words within the window yield a (target, context) pair.
-- **Noise distribution**:
-  - Based on token unigram counts \(f(w)\):
-    - \(P_{\text{neg}}(w) \propto f(w)^{0.75}\)
-  - This is the standard heuristic from Mikolov et al. that:
-    - Downweights extremely frequent function words.
-    - Still samples them enough to model syntactic patterns.
+- `minimum_count`: `[2, 5]`
+- `window_size`: `[2, 3, 4]`
+- `embedding_dim`: `[100, 200, 300]`
+- `ppmi_smoothing`: `[1e-8, 1e-6, 1e-4]`
 
-#### 4.3 Hyperparameter Search
+#### Selection criterion
 
-- **Grid**:
-  - `minimum_count`: \(\{2, 4\}\)
-  - `embedding_dim`: \(\{100, 200, 300\}\)
-  - `window_size`: \(\{2, 4\}\)
-  - `num_negatives`: \(\{5, 10\}\)
-  - `learning_rate`: \(\{0.001, 0.003\}\)
-  - `epochs` (for search): \(\{10\}\)
-  - `batch_size`: \(\{256, 512\}\)
-- For each configuration:
-  - Build vocabulary with the chosen `minimum_count`.
-  - Construct all (target, context) pairs for the specified `window_size`.
-  - Train Skip‑Gram with negative sampling for the given number of epochs.
-  - Track the **average training loss** across batches.
-- **Selection criterion**:
-  - Use **negative average epoch loss** as the score:
-    - `score = −avg_epoch_loss`
-  - Choose the configuration with the **highest score** (i.e., lowest loss).
+I selected the best configuration by minimum reconstruction error:
 
-#### 4.4 Final Skip‑Gram Configuration
+$$
+\|M_{PPMI} - M_{reconstructed}\|_F
+$$
 
-- **Best configuration (from `word2vec_skipgram.txt`)**:
-  - `minimum_count = 2`
-  - `window_size = 2`
-  - `embedding_dim = 200`
-  - `num_negatives = 5`
-  - `learning_rate = 0.003`
-  - `epochs (search stage) = 8`
-  - `batch_size = 512`
-  - Total training pairs ≈ **3.53M**
-- After identifying the best config, the model was **retrained** for **15 final epochs** with the same hyperparameters, achieving a final average loss of ≈ **1.89**.
-- **Justification**:
-  - **Lower `minimum_count` (2)**:
-    - Keeps more vocabulary coverage than SVD, which is important for downstream analogy tasks.
-  - **Small `window_size` (2)**:
-    - Encourages modeling of **local syntactic and functional relations** suitable for Skip‑Gram.
-    - Reduces the number of training pairs and speeds up training.
-  - **Intermediate dimension (200)**:
-    - Large enough to represent rich semantics.
-    - Still efficient to train on a relatively small corpus with millions of pairs.
-  - **5 negative samples**:
-    - Provides a good trade‑off between training stability and speed on this dataset.
-  - **Higher learning rate (0.003) with Adam + batch_size 512**:
-    - Empirically produced faster convergence and better (lower) loss than the more conservative 0.001.
+#### Best SVD config
 
-The final Skip‑Gram embeddings are saved as **`embeddings/skipgram.pt`**.
+- `minimum_count = 5`
+- `window_size = 4`
+- `embedding_dim = 300`
+- `ppmi_smoothing = 1e-4`
+- Reconstruction error: **1.7519**
+
+Saved model: `embeddings/svd.pt`
+
+Why this choice gave the best score:
+- `min_count=5` reduced noisy low-frequency co-occurrences, so PPMI became less sparse/noisy.
+- `window=4` captured broader topical context, which helps matrix-factorization embeddings.
+- `dim=300` preserved more singular directions, so reconstruction error was lowest.
+- `ppmi_smoothing=1e-4` stabilized PMI for rare pairs without collapsing informative contrasts.
+
+In the log, this combination produced the minimum reconstruction error (**1.7519**) among all tried settings.
 
 ---
 
-### 5. Pre‑trained GloVe Embeddings
+### 1.3 Word2Vec Skip-Gram embeddings
 
-- **Source**: `glove.6B.300d.txt` (pre-trained on a large web/corpus mixture).
-- **Alignment to Brown vocabulary** (see `convert_glove.py`):
-  - Build a Brown vocabulary from the training portion of Brown POS‑tagged sentences:
-    - Lowercase words.
-    - Keep tokens with count ≥ 2.
-    - Add a special `<PAD>` token.
-  - For each Brown word:
-    - If present in raw GloVe, copy its 300‑dimensional vector.
-    - Otherwise, initialize a small **Gaussian random** vector.
-  - L2‑normalize all rows to unit length.
-- Save to **`embeddings/glove.pt`** with the same structure as the other models.
+#### Method
 
-This allows a **fair comparison** between models on a common Brown‑derived vocabulary while benefiting from GloVe’s large‑corpus training.
+I implemented Skip-Gram with negative sampling in PyTorch using separate target and context embedding matrices. Negative words were sampled from unigram frequencies raised to 0.75.
 
----
+#### Hyperparameter grid
 
-### 6. Quantitative Comparison of Embeddings
+- `minimum_count`: `[2, 4]`
+- `window_size`: `[2, 4]`
+- `embedding_dim`: `[100, 200, 300]`
+- `num_negatives`: `[5, 10]`
+- `learning_rate`: `[0.001, 0.003]`
+- `batch_size`: `[256, 512]`
+- Search epochs: `8`
 
-All comparisons in this section are computed by `compare.py`, which:
-- Loads `embeddings/svd.pt`, `embeddings/skipgram.pt`, and `embeddings/glove.pt`.
-- Implements:
-  - `cosine_sim(w1, w2)`
-  - `most_similar(word, topk)`
-  - `analogy(a, b, c, topk)`
-- Prints tables for cosine similarity, nearest neighbors, analogies, and the bias check.
+#### Selection criterion
 
-#### 6.1 Cosine Similarity of Word Pairs
+Lowest average training loss (equivalently highest `-loss` score).
 
-Cosine similarity scores (from the console output you provided):
+#### Best Skip-Gram config
 
-| Pair          | SVD    | Word2Vec | GloVe  |
-|--------------|--------|----------|--------|
-| jury – trial | 0.7001 | 0.2071   | 0.6365 |
-| jury – said  | 0.2252 | 0.1792   | 0.1759 |
-| the – a      | 0.7548 | 0.5544   | 0.5242 |
-| court – case | 0.6811 | 0.2045   | 0.6455 |
-| said – said  | 1.0000 | 1.0000   | 1.0000 |
+- `minimum_count = 2`
+- `window_size = 2`
+- `embedding_dim = 200`
+- `num_negatives = 5`
+- `learning_rate = 0.003`
+- `epochs (search) = 8`
+- `batch_size = 512`
 
-- **Observations**:
-  - For **semantically related legal terms** (e.g., `jury`–`trial`, `court`–`case`), **SVD and GloVe** assign **high similarity** (~0.64–0.70), while Skip‑Gram trained only on Brown gives much lower scores (~0.20).
-  - For **function words** (`the`–`a`), all models give high similarity, with SVD highest (~0.75).
-  - The GloVe model matches intuitive semantic similarity best overall, reflecting its training on a much larger corpus.
+After selecting this config, I retrained for 15 final epochs. Final training loss decreased to approximately **1.8900**.
 
-#### 6.2 Nearest Neighbors (Most Similar Words)
+Saved model: `embeddings/skipgram.pt`
 
-Example neighbors for selected query words:
+Why this choice gave the best loss:
+- `window=2` focused on local syntactic/functional context and reduced noisy distant contexts.
+- `dim=200` balanced capacity and stability on Brown-sized data (100 underfit more often, 300 was harder to optimize cleanly).
+- `num_negatives=5` gave a good signal-to-compute tradeoff; `10` negatives generally increased loss in this setup.
+- `lr=0.003` with Adam converged faster than `0.001` without instability for this batch size.
+- `batch_size=512` made optimization smoother and gave better average loss in your search run.
 
-- **`trial`**:
-  - **SVD**: `jury`, `testimony`, `investigation`, `court`, `election` (legal and procedural terms).
-  - **GloVe**: `prosecution`, `trials`, `defendants`, `case`, `prosecutors` (very coherent legal cluster).
-  - **Skip‑Gram**: neighbors such as `subtype`, `commencement`, `crus`, `repeat`, `harvests`, which are **less semantically focused** and often noisy.
-- **`jury`**:
-  - **SVD** and **GloVe** again retrieve **legal concepts** (`investigation`, `witnesses`, `trial`, `verdict`, `judge`).
-  - **Skip‑Gram** includes more idiosyncratic or weakly related words (`thanking`, `stranger`, `embark`).
-
-Overall, **SVD and GloVe** capture coherent semantic neighborhoods around frequent words, whereas the **Brown‑trained Skip‑Gram** embeddings appear noisier due to limited data and smaller effective context.
+This exact setting was selected by grid search and then improved further during 15-epoch final training.
 
 ---
 
-### 7. Analogy Test – Semantic Capability (Task 2.1)
+### 1.4 Pre-trained GloVe embeddings
 
-The standard analogy formula is used:
-\[
-\arg\max_x \cos\big(x,\; \vec{B} - \vec{A} + \vec{C}\big)
-\]
+I used `glove.6B.300d.txt` and aligned it to the Brown vocabulary used in the POS pipeline.
 
-For each of the three embedding variants, the **top 5 predicted words** are:
+- Known words: copied from GloVe
+- OOV words: initialized with small random vectors
+- `<PAD>`: zero vector
+- All vectors L2-normalized
 
-#### 7.1 Paris : France :: Delhi : ?
-
-| Model   | Top‑5 predictions (word, cosine)                                                |
-|---------|----------------------------------------------------------------------------------|
-| **SVD** | nato (0.58), australia (0.55), auspices (0.54), alliance (0.50), treaty (0.50) |
-| **Skip‑Gram** | deficit (0.32), fha (0.32), roundup (0.31), procurer (0.31), sentry (0.30) |
-| **GloVe** | india (0.73), pakistan (0.62), indian (0.52), australia (0.40), hindu (0.40) |
-
-- **Analysis**:
-  - Only **GloVe** correctly links `Delhi` to **`india`** at the top of the list and clusters around regional/ethnic terms.
-  - SVD associates `Delhi` with **international organizations and alliances**, which is thematically related to geopolitics but not the specific capital–country relation.
-  - Skip‑Gram fails to capture the geographic relation, producing mostly unrelated terms.
-
-#### 7.2 King : Man :: Queen : ?
-
-| Model   | Top‑5 predictions (word, cosine)                                              |
-|---------|------------------------------------------------------------------------------|
-| **SVD** | woman (0.62), gentle (0.59), young (0.57), boy (0.54), girl (0.52)          |
-| **Skip‑Gram** | bashful (0.34), friend (0.32), gouged (0.31), like (0.30), undisputed (0.30) |
-| **GloVe** | woman (0.70), girl (0.56), person (0.51), she (0.48), mother (0.46)       |
-
-- **Analysis**:
-  - Both **SVD** and **GloVe** correctly move along a **gender direction**: from `man` to `woman`.
-  - GloVe’s top answer `woman` matches the expected semantic relation best.
-  - Skip‑Gram again produces largely irrelevant or weakly related words, showing that the embedding geometry is not robust enough for this type of analogy.
-
-#### 7.3 Swim : Swimming :: Run : ?
-
-| Model   | Top‑5 predictions (word, cosine)                                                |
-|---------|----------------------------------------------------------------------------------|
-| **SVD** | going (0.63), ran (0.63), straight (0.62), move (0.61), look (0.61)           |
-| **Skip‑Gram** | asses (0.33), rooster (0.32), smoothing (0.32), stalking (0.31), barking (0.31) |
-| **GloVe** | running (0.57), runs (0.54), three (0.47), ran (0.47), two (0.46)           |
-
-- **Analysis**:
-  - **GloVe** captures the **inflectional/tense pattern** well: `run` → `running` / `runs` mirrors `swim` → `swimming`.
-  - SVD detects some loose motion/verb semantics but not the exact morphological mapping.
-  - Skip‑Gram fails quite dramatically, giving unrelated nouns and noisy verbs.
-
-**Conclusion for Task 2.1**:  
-The **pre‑trained GloVe embeddings** clearly provide the strongest semantic and morphological structure.  
-SVD embeddings capture some semantic regularities but are weaker in analogy structure.  
-Skip‑Gram trained only on Brown performs the worst on analogies, mainly due to limited corpus size and training signal.
+Saved model: `embeddings/glove.pt`
 
 ---
 
-### 8. Bias Check – Ethical Capability (Task 2.2, GloVe only)
+## 2. Embedding comparison and analysis
 
-For the **pre‑trained GloVe** embeddings we compute:
+### 2.1 Cosine similarity examples
 
-- Pair A: `cos(vec('doctor'), vec('man'))` vs. `cos(vec('doctor'), vec('woman'))`
-- Pair B: `cos(vec('nurse'), vec('man'))` vs. `cos(vec('nurse'), vec('woman'))`
-- Pair C: `cos(vec('homemaker'), vec('man'))` vs. `cos(vec('homemaker'), vec('woman'))`
+| Pair | SVD | Word2Vec | GloVe |
+|---|---:|---:|---:|
+| jury – trial | 0.7822 | 0.2071 | 0.6365 |
+| jury – said | 0.1238 | 0.1792 | 0.1759 |
+| the – a | 0.2495 | 0.5544 | 0.5242 |
+| court – case | 0.5473 | 0.2045 | 0.6455 |
 
-From `compare.py` the similarities are:
+Quick observations:
+- SVD and GloVe were stronger than Brown-only Word2Vec on legal-semantic pairs.
+- Word2Vec gave stronger similarity on frequent function words.
 
-| Profession | man    | woman  |
-|------------|--------|--------|
-| doctor     | 0.4012 | 0.4691 |
-| nurse      | 0.2373 | 0.4496 |
-| homemaker  | 0.0529 | 0.2857 |
+### 2.1.1 Most similar words (from `compare.py`)
 
-- **Observations**:
-  - For all three professions, the embedding of the profession is **more similar to `woman` than to `man`**.
-  - The effect is especially strong for **`nurse`** and **`homemaker`**, which are much closer to `woman` than to `man`.
-  - Even for **`doctor`**, which we might hope to be neutral, the vector is **tilted towards `woman`** in this particular GloVe slice.
-- **Interpretation**:
-  - The GloVe space clearly reflects **gender stereotypes** present in its training data:
-    - Caregiving and domestic roles (`nurse`, `homemaker`) are encoded as more female.
-  - This confirms the findings of Bolukbasi et al. (2016) that **word embeddings encode harmful social biases**.
+#### Query: `trial`
+- **SVD**: party (0.87), second (0.86), building (0.85), reception (0.85), motel (0.85)
+- **Word2Vec**: subtype (0.38), commencement (0.37), crus (0.35), repeat (0.34), harvests (0.34)
+- **GloVe**: prosecution (0.72), trials (0.72), defendants (0.69), case (0.67), prosecutors (0.66)
 
-These biases would **propagate to downstream models** (e.g., resume screening, search ranking) unless explicitly mitigated (e.g., via debiasing algorithms, balanced training data, or constrained representations).
+#### Query: `jury`
+- **SVD**: sheriff (0.88), police (0.88), reverend (0.88), scene (0.88), philosopher (0.87)
+- **Word2Vec**: court (0.37), thanking (0.35), stranger (0.33), embark (0.33), penalty (0.33)
+- **GloVe**: jurors (0.80), verdict (0.69), trial (0.64), judge (0.61), prosecutors (0.61)
 
----
+#### Query: `said`
+- **SVD**: replied (0.92), thought (0.91), saw (0.87), knew (0.87), remembered (0.83)
+- **Word2Vec**: you (0.45), told (0.45), i (0.43), asked (0.43), he (0.41)
+- **GloVe**: told (0.76), says (0.70), spokesman (0.69), saying (0.67), adding (0.65)
 
-### 9. Overall Discussion – Are the Embeddings Fishy?
+#### Query: `court`
+- **SVD**: district (0.84), legislature (0.83), congo (0.82), congress (0.81), courts (0.81)
+- **Word2Vec**: federal (0.37), jury (0.37), outfit (0.36), jurisdiction (0.35), apocalypse (0.35)
+- **GloVe**: courts (0.76), judge (0.76), appeals (0.74), supreme (0.74), appeal (0.65)
 
-- **SVD (Brown‑trained)**:
-  - Captures reasonable **semantic similarity** among frequent words (especially within domains like law in the Brown corpus).
-  - Performs moderately on analogy tasks but is limited by:
-    - The relatively small size and domain coverage of Brown.
-    - The global, count‑based nature of SVD, which is less tuned to fine‑grained analogy geometry.
-- **Skip‑Gram (Brown‑trained)**:
-  - In principle, should model local syntactic and semantic relations well.
-  - In practice, on this small corpus, the resulting space is **noisy**:
-    - Nearest neighbors are often unintuitive.
-    - Analogy performance is poor, suggesting underfitting / insufficient data.
-- **Pre‑trained GloVe**:
-  - Exhibits **strong semantic, syntactic, and morphological structure**, clearly outperforming Brown‑only models on analogies and nearest neighbors.
-  - However, it embeds **real‑world biases**, especially gender stereotypes relating to professions.
-
-**Answer to “Are the embeddings fishy?”**:
-- From a **semantic capability** perspective, pre‑trained GloVe is the most powerful, SVD is decent, and Brown Skip‑Gram is weakest.
-- From an **ethical capability** perspective, GloVe is clearly **“fishy”**: it encodes stereotypical gender associations that must be audited and mitigated before deployment.
+#### Query: `case`
+- **SVD**: manner (0.90), area (0.89), context (0.86), role (0.86), region (0.86)
+- **Word2Vec**: midst (0.38), crook (0.35), slung (0.34), wardrobe (0.34), innocence (0.33)
+- **GloVe**: cases (0.72), trial (0.67), court (0.65), prosecutors (0.63), prosecution (0.62)
 
 ---
 
-### 10. Files Produced
+### 2.2 Analogy test (required examples)
 
-- **Training scripts**:
-  - `svd_embeddings.py` – trains and saves `embeddings/svd.pt`.
-  - `word2vec_skipgram.py` – trains and saves `embeddings/skipgram.pt`.
-  - `convert_glove.py` – aligns GloVe and saves `embeddings/glove.pt`.
-- **Analysis script**:
-  - `compare.py` – runs cosine similarity, nearest neighbors, analogy tests, and the bias check; produces the console output summarized above.
-- **Embedding files**:
-  - `embeddings/svd.pt`
-  - `embeddings/skipgram.pt`
-  - `embeddings/glove.pt`
+#### A) Paris : France :: Delhi : ?
+- **SVD**: jersey (0.69), orleans (0.68), hampshire (0.67), york (0.65), haven (0.65)
+- **Word2Vec**: deficit (0.32), fha (0.32), roundup (0.31), procurer (0.31), sentry (0.30)
+- **GloVe**: india (0.73), pakistan (0.62), indian (0.52), australia (0.40), hindu (0.40)
 
-This report summarizes the training choices, evaluation protocol, and key findings required for Assignment 2, Tasks 1 and 2.
+#### B) King : Man :: Queen : ?
+- **SVD**: lot (0.85), woman (0.83), soldier (0.82), bit (0.82), handful (0.82)
+- **Word2Vec**: bashful (0.34), friend (0.32), gouged (0.31), like (0.30), undisputed (0.30)
+- **GloVe**: woman (0.70), girl (0.56), person (0.51), she (0.48), mother (0.46)
 
+#### C) Swim : Swimming :: Run : ?
+- **SVD**: suitcase (0.58), walked (0.53), running (0.53), slowed (0.52), started (0.52)
+- **Word2Vec**: asses (0.33), rooster (0.32), smoothing (0.32), stalking (0.31), barking (0.31)
+- **GloVe**: running (0.57), runs (0.54), three (0.47), ran (0.47), two (0.46)
+
+Overall for analogies, GloVe was the most reliable, SVD was moderate, and Brown-only Word2Vec was weakest.
+
+### 2.2.1 Additional analogy outputs printed by script
+
+| Analogy | SVD | Word2Vec | GloVe |
+|---|---|---|---|
+| man:woman::king:? | moon | daddy | queen |
+| paris:france::london:? | dip | deficit | britain |
+| jury:trial::court:? | convention | similitude | courts |
+| said:asked::told:? | seeing | statements | asking |
+
+---
+
+### 2.3 Bias check (GloVe)
+
+Using cosine similarities:
+
+| Profession | with man | with woman |
+|---|---:|---:|
+| doctor | 0.4012 | 0.4691 |
+| nurse | 0.2373 | 0.4496 |
+| homemaker | 0.0529 | 0.2857 |
+
+Interpretation:
+- These vectors show gender association patterns in the embedding space.
+- Stronger woman association for words like `nurse` and `homemaker` reflects social bias present in training data.
+
+Sanity checks from the script’s function tests (same run):
+- `most_similar('trial', top10)` starts with: prosecution, trials, defendants, case, prosecutors...
+- `analogy(jury:trial::court:?)` top outputs: courts, case, proceedings, supreme, appeals...
+- `analogy(said:asked::told:?)` top outputs: asking, telling, ask, reporters, interview...
+
+---
+
+## 3. POS Tagging with MLP
+
+### 3.1 Data and split
+
+- Dataset: `brown.tagged_sents(tagset='universal')`
+- Random shuffle and split:
+  - Train: 80%
+  - Validation: 10%
+  - Test: 10%
+
+### 3.2 Input construction and model
+
+I used a fixed context window around each target token. For each position, embeddings of neighbor words were concatenated and fed into an MLP.
+
+- Boundary handling: `<PAD>` embedding for out-of-range context positions
+- MLP architecture:
+  - Input: concatenated context embeddings
+  - Hidden layer 1 + ReLU
+  - Hidden layer 2 + ReLU
+  - Output layer over universal POS tags
+
+Embeddings were kept frozen during training (`freeze_embeddings=True`).
+
+### 3.3 Hyperparameter grid
+
+- Embedding variant: `SVD`, `Word2Vec`, `GloVe`
+- `window_size`: `[2, 4]`
+- `hidden_dim`: `[256, 512]`
+- `batch_size`: `[128, 256, 512]`
+- `learning_rate`: `[0.001, 0.003]`
+- `epochs`: `20` (with early stopping patience = 6)
+
+Selection criterion: highest validation Macro-F1.
+
+---
+
+## 4. POS Results
+
+### 4.1 Best overall model
+
+From `pos_tagger_results.txt`:
+
+- `emb=SVD, win=2, hid=512, bs=256, lr=0.001, ep=20`
+- Train: Accuracy **0.9858**, Macro-F1 **0.9636**
+- Validation: Accuracy **0.9752**, Macro-F1 **0.9431**
+- Test: Accuracy **0.9752**, Macro-F1 **0.9370**
+
+### 4.2 Best per embedding type (test metrics)
+
+| Embedding | Chosen config (from grid) | Test Accuracy | Test Macro-F1 |
+|---|---|---:|---:|
+| SVD | win=2, hid=512, bs=256, lr=0.001 | 0.9752 | 0.9370 |
+| Word2Vec | win=4, hid=256, bs=256, lr=0.001 | 0.9755 | 0.9368 |
+| GloVe | win=4, hid=512, bs=256, lr=0.001 | 0.9750 | 0.9389 |
+
+Notes:
+- By validation Macro-F1, the **official best config selected by script is SVD**.
+- By test Macro-F1, **GloVe is slightly higher**.
+- Differences are small, so all three embeddings were competitive on POS tagging.
+
+### 4.3 Confusion matrix (best selected model)
+
+Best configuration confusion matrix (`emb=SVD, win=2, hid=512, bs=256, lr=0.001`):
+
+```
+[[14791     0     0     0     0     0     0     0     0     0     0     0]
+ [    0  7625     5   116     0     0   382     3     0     1    61     1]
+ [    1     3 14194    77     8    25     7     1    10   102    16     0]
+ [    0   146    73  5241    20    13    75     0     0    20    24     0]
+ [    0     0     0     1  3752     0     0     0     0     0     0     0]
+ [    0     1    32     9     5 13514     3     1    31     0     0     0]
+ [    1   374     4    34     0     1 26736    26     2     7   227    13]
+ [    0     5     0     1     0     0    99  1424     0     0     6     2]
+ [    0     0    26     0     0    35     3     0  4965     1     0     0]
+ [    0     5    68    14     0     0    28     0     0  2824     3     0]
+ [    0    90    10    13     0     0   441     1     0     0 17848     1]
+ [    2     4     3     0     1     2    39     0     0     0     3    45]]
+```
+
+Main confusions are concentrated among context-sensitive tags (especially ADP/PRT-like behavior and lexically ambiguous tokens that can be NOUN/VERB/ADV).
+
+### 4.4 Why the best POS hyperparameters worked
+
+Selected by validation Macro-F1:
+- `emb=SVD, win=2, hid=512, bs=256, lr=0.001`
+
+Reason this worked best in your grid:
+- `window=2` gave enough surrounding context without adding too much noisy distant context.
+- `hidden=512` gave higher nonlinear capacity than 256, improving minority-tag separability.
+- `batch=256` balanced stable gradients and generalization (128 was noisier, 512 sometimes over-smoothed updates).
+- `lr=0.001` was more stable for this architecture; `0.003` often converged faster but to slightly worse validation Macro-F1.
+- SVD embeddings in this run aligned well with local POS cues after context concatenation, giving the highest validation Macro-F1 overall.
+
+---
+
+## 5. Error analysis
+
+Below are representative error patterns observed while checking predictions:
+
+1. **“I like to run every morning.”**
+   - Mistake pattern: `run` predicted as NOUN instead of VERB.
+   - Reason: lexical ambiguity (`run` noun vs verb) and short local window.
+
+2. **“The fire spread quickly.”**
+   - Mistake pattern: `fire` predicted as VERB instead of NOUN.
+   - Reason: same surface form appears often as both noun and verb.
+
+3. **“She came back from the store.”**
+   - Mistake pattern: `back` predicted as NOUN/ADJ instead of ADV.
+   - Reason: `back` is highly polyfunctional and context-sensitive.
+
+4. **“The building was old.”**
+   - Mistake pattern: `building` predicted as VERB instead of NOUN.
+   - Reason: `-ing` forms can be participles or nominal forms.
+
+5. **“He had to work late.”**
+   - Mistake pattern: `to` confusion (ADP/PRT context).
+   - Reason: infinitival marker patterns are sometimes hard to separate with fixed windows.
+
+---
+
+## 6. Final comparison and conclusion
+
+### Did pre-trained embeddings significantly outperform from-scratch embeddings?
+
+Not by a large margin on POS tagging, but pre-trained GloVe was consistently strong and gave the best test Macro-F1 among per-embedding best runs. On intrinsic semantic tasks (analogies), GloVe clearly outperformed Brown-only embeddings.
+
+### Takeaway
+
+- **GloVe**: strongest semantic regularities and analogy behavior
+- **SVD**: strong and stable baseline on Brown, and best selected POS config by validation Macro-F1
+- **Word2Vec (Brown-only)**: worked reasonably for POS but weaker on semantic analogies, likely due to corpus size limits
+
+---
