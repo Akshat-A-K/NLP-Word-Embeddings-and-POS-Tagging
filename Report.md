@@ -355,3 +355,12 @@ Not by a large margin on POS tagging, but pre-trained GloVe was consistently str
 - **Word2Vec (Brown-only)**: worked reasonably for POS but weaker on semantic analogies, likely due to corpus size limits
 
 ---
+
+## Embeddings Folder Access
+
+Due to submission restrictions, the `.pt` model files for SVD, Skip-Gram, and GloVe embeddings are not included in the zip folder. You can access all embedding files in the following GitHub repository:
+
+**Embeddings folder GitHub link:**
+https://github.com/Akshat-A-K/NLP-Word-Embeddings-and-POS-Tagging/tree/main/embeddings
+
+Please refer to this link for downloading or inspecting the trained embedding files (`svd.pt`, `skipgram.pt`, `glove.pt`).
