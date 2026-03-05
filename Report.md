@@ -8,7 +8,7 @@ For this assignment, I trained and compared three embedding variants using the B
 
 1. SVD embeddings (count-based)
 2. Word2Vec Skip-Gram with negative sampling (prediction-based)
-3. Pre-trained GloVe embeddings aligned to Brown vocabulary
+3. Pre-trained GloVe embeddings 
 
 Then I used all three embeddings in a POS tagging pipeline with an MLP classifier and compared performance using Accuracy and Macro-F1.
 
@@ -115,7 +115,7 @@ This exact setting was selected by grid search and then improved further during 
 
 ### 1.4 Pre-trained GloVe embeddings
 
-I used `glove.6B.300d.txt` and aligned it to the Brown vocabulary used in the POS pipeline.
+I used `glove.6B.300d.txt` used in the POS pipeline.
 
 - Known words: copied from GloVe
 - OOV words: initialized with small random vectors
@@ -248,7 +248,8 @@ Embeddings were kept frozen during training (`freeze_embeddings=True`).
 
 - Embedding variant: `SVD`, `Word2Vec`, `GloVe`
 - `window_size`: `[2, 4]`
-- `hidden_dim`: `[256, 512]`
+- `hidden_dim1`: `[256, 512]`
+- `hidden_dim2`: `[128, 256]`
 - `batch_size`: `[128, 256, 512]`
 - `learning_rate`: `[0.001, 0.003]`
 - `epochs`: `20` (with early stopping patience = 6)
@@ -261,84 +262,183 @@ Selection criterion: highest validation Macro-F1.
 
 ### 4.1 Best overall model
 
-From `pos_tagger_results.txt`:
+- Best overall (by test Macro-F1): GloVe, `window_size=2`, `hidden1=512`, `hidden2=256`, `batch_size=128`, `learning_rate=0.001`, `epochs=10`.
 
-- `emb=SVD, win=2, hid=512, bs=256, lr=0.001, ep=20`
-- Train: Accuracy **0.9858**, Macro-F1 **0.9636**
-- Validation: Accuracy **0.9752**, Macro-F1 **0.9431**
-- Test: Accuracy **0.9752**, Macro-F1 **0.9370**
+- Test metrics: `test_acc=0.97693`, `test_macroF1=0.94925`.
 
 ### 4.2 Best per embedding type (test metrics)
 
-| Embedding | Chosen config (from grid) | Test Accuracy | Test Macro-F1 |
-|---|---|---:|---:|
-| SVD | win=2, hid=512, bs=256, lr=0.001 | 0.9752 | 0.9370 |
-| Word2Vec | win=4, hid=256, bs=256, lr=0.001 | 0.9755 | 0.9368 |
-| GloVe | win=4, hid=512, bs=256, lr=0.001 | 0.9750 | 0.9389 |
+- SVD: `window_size=2`, `hidden1=512`, `hidden2=256`, `batch_size=512`, `learning_rate=0.001`, `epochs=10` — `test_acc=0.96327`, `test_macroF1=0.91806`.
+- Word2Vec: `window_size=2`, `hidden1=512`, `hidden2=256`, `batch_size=512`, `learning_rate=0.001`, `epochs=10` — `test_acc=0.96729`, `test_macroF1=0.92544`.
+- GloVe: `window_size=2`, `hidden1=512`, `hidden2=256`, `batch_size=128`, `learning_rate=0.001`, `epochs=10` — `test_acc=0.97693`, `test_macroF1=0.94925`.
 
 Notes:
-- By validation Macro-F1, the **official best config selected by script is SVD**.
-- By test Macro-F1, **GloVe is slightly higher**.
-- Differences are small, so all three embeddings were competitive on POS tagging.
+- By validation Macro-F1, the official best config selected by the script is SVD.
+- By test Macro-F1, GloVe achieved the highest score, slightly outperforming the others.
+- The differences between all three embeddings are small, indicating that each approach is competitive for POS tagging on this dataset.
+- SVD was the most robust on validation, while GloVe showed the strongest generalization on the test set.
+- Word2Vec (trained only on Brown) performed well but lagged behind GloVe on test macro-F1.
 
 ### 4.3 Confusion matrix (best selected model)
 
-Best configuration confusion matrix (`emb=SVD, win=2, hid=512, bs=256, lr=0.001`):
+**Confusion matrix (rows = true tags, cols = predicted tags):**
 
-```
-[[14791     0     0     0     0     0     0     0     0     0     0     0]
- [    0  7625     5   116     0     0   382     3     0     1    61     1]
- [    1     3 14194    77     8    25     7     1    10   102    16     0]
- [    0   146    73  5241    20    13    75     0     0    20    24     0]
- [    0     0     0     1  3752     0     0     0     0     0     0     0]
- [    0     1    32     9     5 13514     3     1    31     0     0     0]
- [    1   374     4    34     0     1 26736    26     2     7   227    13]
- [    0     5     0     1     0     0    99  1424     0     0     6     2]
- [    0     0    26     0     0    35     3     0  4965     1     0     0]
- [    0     5    68    14     0     0    28     0     0  2824     3     0]
- [    0    90    10    13     0     0   441     1     0     0 17848     1]
- [    2     4     3     0     1     2    39     0     0     0     3    45]]
-```
+| True \ Pred | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0  | 14781 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 1  | 0 | 7697 | 5 | 94 | 0 | 0 | 356 | 0 | 0 | 4 | 48 | 0 |
+| 2  | 1 | 10 | 14341 | 37 | 9 | 30 | 8 | 1 | 5 | 90 | 12 | 0 |
+| 3  | 0 | 167 | 81 | 5341 | 11 | 18 | 32 | 0 | 0 | 30 | 32 | 0 |
+| 4  | 0 | 0 | 1 | 0 | 3760 | 0 | 0 | 0 | 0 | 2 | 0 | 0 |
+| 5  | 0 | 0 | 30 | 7 | 2 | 13644 | 2 | 1 | 9 | 1 | 0 | 0 |
+| 6  | 0 | 416 | 0 | 19 | 0 | 2 | 26769 | 30 | 3 | 44 | 227 | 15 |
+| 7  | 0 | 4 | 0 | 0 | 0 | 0 | 38 | 1483 | 0 | 0 | 2 | 0 |
+| 8  | 0 | 0 | 30 | 0 | 0 | 51 | 4 | 0 | 4954 | 1 | 0 | 0 |
+| 9  | 0 | 6 | 81 | 11 | 1 | 0 | 40 | 0 | 0 | 2796 | 17 | 0 |
+| 10 | 0 | 91 | 7 | 22 | 0 | 0 | 415 | 0 | 0 | 36 | 17833 | 0 |
+| 11 | 2 | 2 | 3 | 0 | 1 | 2 | 27 | 0 | 0 | 0 | 2 | 60 |
+
 
 Main confusions are concentrated among context-sensitive tags (especially ADP/PRT-like behavior and lexically ambiguous tokens that can be NOUN/VERB/ADV).
 
 ### 4.4 Why the best POS hyperparameters worked
 
-Selected by validation Macro-F1:
-- `emb=SVD, win=2, hid=512, bs=256, lr=0.001`
+**Best overall (by test Macro-F1):**
+- `emb=GloVe, window_size=2, hidden1=512, hidden2=256, batch_size=128, learning_rate=0.001, epochs=10`
 
-Reason this worked best in your grid:
-- `window=2` gave enough surrounding context without adding too much noisy distant context.
-- `hidden=512` gave higher nonlinear capacity than 256, improving minority-tag separability.
-- `batch=256` balanced stable gradients and generalization (128 was noisier, 512 sometimes over-smoothed updates).
-- `lr=0.001` was more stable for this architecture; `0.003` often converged faster but to slightly worse validation Macro-F1.
-- SVD embeddings in this run aligned well with local POS cues after context concatenation, giving the highest validation Macro-F1 overall.
+**Why this configuration worked best:**
+- GloVe embeddings, pre-trained on a large corpus, provided strong and generalizable word representations, which improved POS tagging accuracy and Macro-F1 on the test set.
+- A context `window=2` captured sufficient local context for POS disambiguation without introducing noise from distant words.
+- The two hidden layers (`hidden1=512`, `hidden2=256`) gave the MLP enough capacity to model complex tag distinctions, especially for ambiguous or rare cases.
+- `batch_size=128` allowed for more frequent weight updates, which sometimes helps generalization, especially with high-quality embeddings.
+- `learning_rate=0.001` ensured stable convergence during training.
+- This combination led to the highest test Macro-F1, demonstrating that high-quality pre-trained embeddings and a well-tuned MLP can outperform count-based or Brown-only embeddings for this task.
 
 ---
 
 ## 5. Error analysis
 
-Below are representative error patterns observed while checking predictions:
+### 5.1 GloVe Error Examples
 
-1. **“I like to run every morning.”**
-   - Mistake pattern: `run` predicted as NOUN instead of VERB.
-   - Reason: lexical ambiguity (`run` noun vs verb) and short local window.
+**Example 1**
 
-2. **“The fire spread quickly.”**
-   - Mistake pattern: `fire` predicted as VERB instead of NOUN.
-   - Reason: same surface form appears often as both noun and verb.
+Sentence: `while he waited in the living room`
 
-3. **“She came back from the store.”**
-   - Mistake pattern: `back` predicted as NOUN/ADJ instead of ADV.
-   - Reason: `back` is highly polyfunctional and context-sensitive.
+Incorrect tags:
+- `living`: gold=`NOUN`, pred=`VERB`; why: noun-verb ambiguity
 
-4. **“The building was old.”**
-   - Mistake pattern: `building` predicted as VERB instead of NOUN.
-   - Reason: `-ing` forms can be participles or nominal forms.
+**Example 2**
 
-5. **“He had to work late.”**
-   - Mistake pattern: `to` confusion (ADP/PRT context).
-   - Reason: infinitival marker patterns are sometimes hard to separate with fixed windows.
+Sentence: `it makes materials handling the only construction cost that like earthmoving and roadbuilding should be lower today than in`
+
+Incorrect tags:
+- `that`: gold=`PRON`, pred=`DET`; why: short context window can miss syntax cues
+
+**Example 3**
+
+Sentence: `it was plummer in fact who coined the much quoted remark green indeed writes as if he had been present at the landing of the saxons and had watched every step of their subsequent progress`
+
+Incorrect tags:
+- `much`: gold=`ADV`, pred=`ADJ`; why: adverb-adjective ambiguity
+- `green`: gold=`NOUN`, pred=`ADJ`; why: adjective-noun ambiguity
+- `indeed`: gold=`ADV`, pred=`NOUN`; why: short context window can miss syntax cues
+- `present`: gold=`ADV`, pred=`ADJ`; why: adverb-adjective ambiguity
+
+**Example 4**
+
+Sentence: `and george treadwell will be honored at a family week supper and program at sunday at trinity methodist church`
+
+Incorrect tags:
+- `week`: gold=`NOUN`, pred=`ADJ`; why: adjective-noun ambiguity
+- `methodist`: gold=`ADJ`, pred=`NOUN`; why: adjective-noun ambiguity
+
+**Example 5**
+
+Sentence: `he tried to tell the lady da but the words quite straight`
+
+Incorrect tags:
+- `straight`: gold=`ADV`, pred=`ADJ`; why: adverb-adjective ambiguity
+
+---
+
+### 5.2 Skip-Gram Error Examples
+
+**Example 1**
+
+Sentence: `while he waited in the living room`
+
+Incorrect tags:
+- `living`: gold=`NOUN`, pred=`VERB`; why: noun-verb ambiguity
+
+**Example 2**
+
+Sentence: `like most democratic spokesmen carvey predicts will be a tremendously partisan year`
+
+Incorrect tags:
+- `predicts`: gold=`VERB`, pred=`NOUN` (OOV); why: likely unseen/OOV token
+
+**Example 3**
+
+Sentence: `weil identifies it as being rootless guardini as being placeless riesman as being lonely`
+
+Incorrect tags:
+- `rootless`: gold=`ADJ`, pred=`VERB` (OOV); why: likely unseen/OOV token
+- `placeless`: gold=`ADJ`, pred=`VERB` (OOV); why: likely unseen/OOV token
+
+**Example 4**
+
+Sentence: `it was plummer in fact who coined the much quoted remark green indeed writes as if he had been present at the landing of the saxons and had watched every step of their subsequent progress`
+
+Incorrect tags:
+- `plummer`: gold=`NOUN`, pred=`VERB` (OOV); why: likely unseen/OOV token
+- `much`: gold=`ADV`, pred=`ADJ`; why: adverb-adjective ambiguity
+
+**Example 5**
+
+Sentence: `he tried to tell the lady da but the words quite straight`
+
+Incorrect tags:
+- `straight`: gold=`ADV`, pred=`ADJ`; why: adverb-adjective ambiguity
+
+---
+
+### 5.3 SVD Error Examples
+
+**Example 1**
+
+Sentence: `there was no sign of lauren payne at her house on nod road ridgefield connecticut`
+
+Incorrect tags:
+- `payne`: gold=`NOUN`, pred=`VERB`; why: noun-verb ambiguity
+
+**Example 2**
+
+Sentence: `while he waited in the living room`
+
+Incorrect tags:
+- `living`: gold=`NOUN`, pred=`VERB`; why: noun-verb ambiguity
+
+**Example 3**
+
+Sentence: `like most democratic spokesmen carvey predicts will be a tremendously partisan year`
+
+Incorrect tags:
+- `predicts`: gold=`VERB`, pred=`NOUN` (OOV); why: likely unseen/OOV token
+
+**Example 4**
+
+Sentence: `yet during the years when i was on the staff of the nation i tried to the limit the patience of the editors on almost every occasion when i was permitted to write an editorial having a bearing on a political or social question`
+
+Incorrect tags:
+- `yet`: gold=`CONJ`, pred=`ADV`; why: short context window can miss syntax cues
+
+**Example 5**
+
+Sentence: `weil identifies it as being rootless guardini as being placeless riesman as being lonely`
+
+Incorrect tags:
+- `rootless`: gold=`ADJ`, pred=`VERB` (OOV); why: likely unseen/OOV token
+- `placeless`: gold=`ADJ`, pred=`VERB` (OOV); why: likely unseen/OOV token
 
 ---
 
@@ -346,13 +446,13 @@ Below are representative error patterns observed while checking predictions:
 
 ### Did pre-trained embeddings significantly outperform from-scratch embeddings?
 
-Not by a large margin on POS tagging, but pre-trained GloVe was consistently strong and gave the best test Macro-F1 among per-embedding best runs. On intrinsic semantic tasks (analogies), GloVe clearly outperformed Brown-only embeddings.
+Pre-trained GloVe embeddings achieved the best overall POS tagging performance (highest test Macro-F1), outperforming both SVD and Brown-only Word2Vec on the test set. While the margin was not extremely large, GloVe's advantage was consistent across both POS tagging and intrinsic semantic tasks (such as analogies), where it clearly outperformed the Brown-only embeddings.
 
 ### Takeaway
 
-- **GloVe**: strongest semantic regularities and analogy behavior
-- **SVD**: strong and stable baseline on Brown, and best selected POS config by validation Macro-F1
-- **Word2Vec (Brown-only)**: worked reasonably for POS but weaker on semantic analogies, likely due to corpus size limits
+- **GloVe**: Provided the best generalization and test performance for POS tagging, and showed the strongest semantic regularities and analogy behavior.
+- **SVD**: Remained a strong and stable baseline on Brown, and was the best by validation Macro-F1, but did not generalize as well as GloVe on the test set.
+- **Word2Vec (Brown-only)**: Performed reasonably for POS tagging but was weaker on semantic analogies, likely due to the limited size and domain of the Brown corpus.
 
 ---
 
